@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int      @id @default(autoincrement())
+  name          String
+  email         String   @unique
+  passwordHash  String
+  role          Role     @default(ADMIN) // Changed from GUEST
+  staffRole     String?  // New field for staff role (Receptionist, Housekeeping, etc.)
+  createdAt     DateTime @default(now())
+  reservations  Reservation[]
+  requests      Request[]
+  invoices      Invoice[]
+  notifications Notification[]
+}
+
+model Room {
+  id           Int      @id @default(autoincrement())
+  number       String   @unique
+  type         String
+  price        Float
+  floor        String?
+  amenities    String   @default("") // Changed from String[] to String
+  description  String?
+  status       String   @default("Available")
+  available    Boolean  @default(true)
+  reservations Reservation[]
+}
+
+model Reservation {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  roomId    Int
+  checkIn   DateTime
+  checkOut  DateTime
+  status    String   @default("Pending")
+  user      User     @relation(fields: [userId], references: [id])
+  room      Room     @relation(fields: [roomId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Invoice {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  amount    Float
+  status    String   @default("Unpaid")
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model MenuItem {
+  id          Int      @id @default(autoincrement())
+  name        String
+  category    String
+  price       Float
+  description String?
+  available   Boolean  @default(true)
+  requests    Request[]
+}
+
+model Request {
+  id                 Int      @id @default(autoincrement())
+  userId            Int
+  menuItemId        Int?
+  quantity          Int       @default(1)
+  specialInstructions String?
+  status            String    @default("Pending") // Pending, Confirmed, Completed, Cancelled
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  menuItem          MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  title       String
+  message     String
+  type        String   // MENU_UPDATE, BOOKING_CONFIRMED, REQUEST_STATUS, PAYMENT_UPDATE
+  isRead      Boolean  @default(false)
+  relatedId   Int?     // ID of related booking, request, invoice, etc.
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum Role {
+  ADMIN
+  GUEST
+}

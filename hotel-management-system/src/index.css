@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+:root {
+	--green-600: #038b35;
+	--green-500: #0fab48;
+	--green-300: #15ec64;
+}
+
+.dashboard-hero {
+	background: linear-gradient(135deg, var(--green-600) 0%, var(--green-500) 30%, var(--green-300) 60%, #ffffff 100%);
+	border-radius: 16px;
+	padding: 32px;
+	box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+}
+
+.berkshire-swash-bold {
+	font-family: "Berkshire Swash", serif;
+	font-weight: 800;
+	font-size: 1.3rem;
+	font-style: normal;
+  }
+  
