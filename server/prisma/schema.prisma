@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -12,13 +12,23 @@ model User {
   name          String
   email         String   @unique
   passwordHash  String
-  role          Role     @default(ADMIN) // Changed from GUEST
-  staffRole     String?  // New field for staff role (Receptionist, Housekeeping, etc.)
+  role          Role     @default(ADMIN)
+  staffRole     String?
+  // Cross-project authentication fields
+  globalUserId  String?  @unique // For cross-project identification
+  projects      Json     @default("[]") // Array of project IDs user has access to, stored as JSON
+  lastLogin     DateTime?
+  isActive      Boolean  @default(true)
+  emailVerified Boolean  @default(false)
+  // Existing relations
   createdAt     DateTime @default(now())
   reservations  Reservation[]
   requests      Request[]
   invoices      Invoice[]
   notifications Notification[]
+  // New auth-related relations
+  sessions      UserSession[]
+  apiKeys       ApiKey[]
 }
 
 model Room {
@@ -89,6 +99,30 @@ model Notification {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Cross-project authentication models
+model UserSession {
+  id        String   @id @default(cuid())
+  userId    Int
+  token     String   @unique
+  expiresAt DateTime
+  projectId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  userId    Int
+  name      String
+  key       String   @unique
+  projects  Json     @default("[]") // Array of project IDs, stored as JSON
+  expiresAt DateTime?
+  lastUsed  DateTime?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 enum Role {

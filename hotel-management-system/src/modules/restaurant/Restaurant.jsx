@@ -100,7 +100,7 @@ function Restaurant() {
 							<tr key={i.id} className="border-t">
 								<td className="p-3">{i.name}</td>
 								<td className="p-3">{i.category}</td>
-								<td className="p-3">${i.price.toFixed(2)}</td>
+								<td className="p-3">₵{i.price.toFixed(2)}</td>
 								<td className="p-3">
 									<button onClick={() => toggleAvail(i.id)} className={`inline-flex items-center gap-1 ${i.available ? 'text-emerald-600' : 'text-slate-400'}`}>
 										{i.available ? <ToggleRight size={18} /> : <ToggleLeft size={18} />} {i.available ? 'Available' : 'Unavailable'}

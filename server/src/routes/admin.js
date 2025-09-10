@@ -7,14 +7,77 @@ import NotificationService from '../services/notificationService.js';
 const router = Router();
 router.use(requireAuth, requireAdmin);
 
+// Get available rooms
+router.get('/rooms/available', async (req, res) => {
+    try {
+        const { checkIn, checkOut } = req.query;
+        
+        if (!checkIn || !checkOut) {
+            return res.status(400).json({ error: 'Both checkIn and checkOut dates are required' });
+        }
+
+        // Convert string dates to Date objects
+        const checkInDate = new Date(checkIn);
+        const checkOutDate = new Date(checkOut);
+
+        // Get all rooms
+        const allRooms = await prisma.room.findMany({
+            include: {
+                reservations: {
+                    where: {
+                        status: { in: ['CONFIRMED', 'CHECKED_IN'] },
+                        OR: [
+                            {
+                                checkIn: { lt: checkOutDate },
+                                checkOut: { gt: checkInDate }
+                            }
+                        ]
+                    },
+                    select: { id: true }
+                }
+            }
+        });
+
+        // Filter out rooms with conflicting reservations
+        const availableRooms = allRooms
+            .filter(room => room.status === 'AVAILABLE' && room.reservations.length === 0)
+            .map(room => ({
+                id: room.id,
+                number: room.number,
+                type: room.type,
+                price: room.price,
+                status: room.status,
+                capacity: room.capacity,
+                description: room.description
+            }));
+
+        res.json(availableRooms);
+    } catch (error) {
+        console.error('Error fetching available rooms:', error);
+        res.status(500).json({ error: 'Failed to fetch available rooms', details: error.message });
+    }
+});
+
 // Rooms list
 router.get('/rooms', async (_req, res) => {
-    const rooms = await prisma.room.findMany();
-    const shaped = rooms.map((r) => ({
-        ...r,
-        amenities: r.amenities ? r.amenities.split(',').map((s) => s.trim()).filter(Boolean) : []
-    }));
-    res.json(shaped);
+    try {
+        const rooms = await prisma.room.findMany({
+            include: {
+                _count: {
+                    select: { reservations: { where: { status: 'CHECKED_IN' } } }
+                }
+            }
+        });
+        
+        const shaped = rooms.map((r) => ({
+            ...r,
+            amenities: r.amenities ? r.amenities.split(',').map((s) => s.trim()).filter(Boolean) : []
+        }));
+        res.json(shaped);
+    } catch (error) {
+        console.error('Error fetching rooms:', error);
+        res.status(500).json({ error: 'Failed to fetch rooms', details: error.message });
+    }
 });
 
 // Create room
@@ -50,35 +113,160 @@ router.post('/rooms', async (req, res) => {
 
 // Update room
 router.put('/rooms/:id', async (req, res) => {
-    const id = Number(req.params.id);
-    const {
-        number,
-        type,
-        price,
-        available,
-        floor = null,
-        status,
-        description = null,
-        amenities = []
-    } = req.body;
+    try {
+        const id = Number(req.params.id);
+        const {
+            number,
+            type,
+            price,
+            available = true,
+            floor = null,
+            status = 'Available', // Match the schema default
+            description = null,
+            amenities = []
+        } = req.body;
 
-    const amenitiesStr = Array.isArray(amenities) ? amenities.join(',') : (amenities || '');
+        // Get the current room data first
+        const currentRoom = await prisma.room.findUnique({
+            where: { id },
+            include: {
+                _count: {
+                    select: { reservations: true }
+                }
+            }
+        });
 
-    const room = await prisma.room.update({
-        where: { id },
-        data: {
-            ...(number != null && { number }),
-            ...(type != null && { type }),
-            ...(price != null && { price: Number(price) }),
-            ...(available != null && { available: Boolean(available) }),
-            ...(floor !== undefined && { floor }),
-            ...(status != null && { status }),
-            ...(description !== undefined && { description }),
-            ...(amenities !== undefined && { amenities: amenitiesStr }),
+        if (!currentRoom) {
+            return res.status(404).json({ error: 'Room not found' });
         }
-    });
-    const shaped = { ...room, amenities: amenitiesStr ? amenitiesStr.split(',').map((s) => s.trim()).filter(Boolean) : [] };
-    res.json(shaped);
+
+        // Convert amenities to proper format
+        const amenitiesStr = Array.isArray(amenities) ? 
+            amenities.join(',') : 
+            (typeof amenities === 'string' ? amenities : '');
+
+        // Prepare update data with proper validation
+        const updateData = {
+            number: number !== undefined ? String(number) : currentRoom.number,
+            type: type || currentRoom.type || 'SINGLE',
+            price: price !== undefined ? parseFloat(price) : parseFloat(currentRoom.price) || 0,
+            available: available !== undefined ? Boolean(available) : currentRoom.available !== false,
+            floor: floor !== undefined ? String(floor) : currentRoom.floor || null,
+            status: status || currentRoom.status || 'Available',
+            description: description !== undefined ? String(description) : (currentRoom.description || null),
+            amenities: amenitiesStr
+        };
+
+        // Validate required fields
+        if (!updateData.number) {
+            return res.status(400).json({ error: 'Room number is required' });
+        }
+
+        if (isNaN(updateData.price) || updateData.price < 0) {
+            return res.status(400).json({ error: 'Invalid price' });
+        }
+
+        // Check for duplicate room number
+        if (updateData.number !== currentRoom.number) {
+            const existingRoom = await prisma.room.findFirst({
+                where: {
+                    number: updateData.number,
+                    id: { not: id }
+                }
+            });
+            
+            if (existingRoom) {
+                return res.status(400).json({ error: 'Room number already exists' });
+            }
+        }
+
+        // Update the room
+        const updatedRoom = await prisma.room.update({
+            where: { id },
+            data: updateData,
+            include: {
+                _count: {
+                    select: { reservations: true }
+                }
+            }
+        });
+
+        // Format the response
+        const response = {
+            ...updatedRoom,
+            amenities: updatedRoom.amenities ? 
+                updatedRoom.amenities.split(',').map(s => s.trim()).filter(Boolean) : []
+        };
+        
+        res.json(response);
+    } catch (error) {
+        console.error('Error updating room:', error);
+        res.status(500).json({ 
+            error: 'Failed to update room',
+            details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
+    }
+});
+
+// Get room by ID
+router.get('/rooms/:id', async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        
+        if (isNaN(id)) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Invalid room ID' 
+            });
+        }
+
+        const room = await prisma.room.findUnique({
+            where: { id },
+            include: {
+                _count: {
+                    select: { reservations: true }
+                },
+                reservations: {
+                    where: {
+                        status: { in: ['CONFIRMED', 'CHECKED_IN'] },
+                        checkOut: { gte: new Date() }
+                    },
+                    orderBy: { checkIn: 'asc' },
+                    take: 1
+                }
+            }
+        });
+
+        if (!room) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Room not found' 
+            });
+        }
+
+        // Format the response
+        const response = {
+            ...room,
+            amenities: room.amenities ? 
+                room.amenities.split(',').map(s => s.trim()).filter(Boolean) : [],
+            nextReservation: room.reservations[0] || null
+        };
+
+        // Remove the full reservations array from the response
+        delete response.reservations;
+
+        res.json({
+            success: true,
+            data: response
+        });
+    } catch (error) {
+        console.error('Error fetching room:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to fetch room details',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
 });
 
 // Delete room
@@ -88,48 +276,120 @@ router.delete('/rooms/:id', async (req, res) => {
     res.status(204).end();
 });
 
-// Dashboard stats remain
+// Dashboard stats with enhanced room status
 router.get('/stats', async (_req, res) => {
     try {
-        const [availableRooms, reservations, pendingInvoices, totalInvoices, menuItems] = await Promise.all([
-            prisma.room.count({ where: { available: true } }),
-            prisma.reservation.count(),
+        const [rooms, reservations, pendingInvoices, totalInvoices, menuItems, allReservations] = await Promise.all([
+            prisma.room.findMany({
+                include: {
+                    reservations: {
+                        where: {
+                            OR: [
+                                { status: 'CHECKED_IN' },
+                                { 
+                                    status: 'CONFIRMED',
+                                    checkIn: { lte: new Date() },
+                                    checkOut: { gte: new Date() }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }),
+            prisma.reservation.findMany({
+                where: { 
+                    status: { in: ['PENDING', 'CONFIRMED', 'CHECKED_IN'] },
+                    checkIn: { lte: new Date() },
+                    checkOut: { gte: new Date() }
+                }
+            }),
             prisma.invoice.count({ where: { status: 'Unpaid' } }),
             prisma.invoice.count(),
-            prisma.menuItem.count()
+            prisma.menuItem.count(),
+            prisma.reservation.findMany({
+                where: {
+                    checkIn: { gte: new Date(new Date().setMonth(new Date().getMonth() - 6)) }
+                },
+                include: {
+                    room: true
+                }
+            })
         ]);
 
-        // Calculate occupancy percentage (6 total rooms)
-        const totalRooms = 6;
-        const occupiedRooms = totalRooms - availableRooms;
-        const occupancy = Math.round((occupiedRooms / totalRooms) * 100);
+        // Calculate room statuses
+        const roomStatuses = rooms.reduce((acc, room) => {
+            const status = room.status || 'Available';
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+        }, {});
 
-        // Get recent invoice amounts for revenue calculation
-        const recentInvoices = await prisma.invoice.findMany({
+        // Calculate occupancy
+        const totalRooms = rooms.length;
+        const availableRooms = roomStatuses['Available'] || 0;
+        const occupiedRooms = roomStatuses['Occupied'] || 0;
+        const maintenanceRooms = roomStatuses['Maintenance'] || 0;
+        const cleaningRooms = roomStatuses['Cleaning'] || 0;
+
+        // Calculate pending amount
+        const pendingInvoicesData = await prisma.invoice.findMany({
             where: { status: 'Unpaid' },
             select: { amount: true }
         });
-        const totalPendingAmount = recentInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+        const totalPendingAmount = pendingInvoicesData.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0);
 
-        // Get reservation status breakdown
-        const confirmedReservations = await prisma.reservation.count({ where: { status: 'Confirmed' } });
-        const pendingReservations = await prisma.reservation.count({ where: { status: 'Pending' } });
+        // Group reservations by status
+        const reservationStatuses = reservations.reduce((acc, r) => {
+            acc[r.status] = (acc[r.status] || 0) + 1;
+            return acc;
+        }, {});
+
+        // Calculate monthly revenue for the last 6 months
+        const monthlyRevenue = Array(6).fill(0);
+        const currentDate = new Date();
+        
+        allReservations.forEach(reservation => {
+            if (reservation.room && reservation.checkIn) {
+                const reservationDate = new Date(reservation.checkIn);
+                const monthDiff = (currentDate.getFullYear() - reservationDate.getFullYear()) * 12 + 
+                                 currentDate.getMonth() - reservationDate.getMonth();
+                
+                if (monthDiff >= 0 && monthDiff < 6) {
+                    const price = typeof reservation.room.price === 'number' ? 
+                                reservation.room.price : 
+                                parseFloat(reservation.room.price) || 0;
+                    monthlyRevenue[5 - monthDiff] += price;
+                }
+            }
+        });
 
         res.json({
-            occupancy,
-            activeReservations: reservations,
+            totalRooms,
             availableRooms,
+            occupiedRooms,
+            maintenanceRooms,
+            cleaningRooms,
+            activeReservations: reservations,
             pendingInvoices,
             totalInvoices,
-            totalPendingAmount: Math.round(totalPendingAmount),
-            confirmedReservations,
-            pendingReservations,
-            mealRequest: menuItems, // Using menu items count as meal requests
-            totalRooms
+            totalPendingAmount: Math.round(totalPendingAmount * 100) / 100, // Round to 2 decimal places
+            confirmedReservations: reservationStatuses['CONFIRMED'] || 0,
+            pendingReservations: reservationStatuses['PENDING'] || 0,
+            checkedInReservations: reservationStatuses['CHECKED_IN'] || 0,
+            mealRequest: menuItems,
+            rooms: rooms.map(room => ({
+                ...room,
+                price: Number(room.price) || 0,
+                reservations: room.reservations || []
+            })),
+            occupancy: totalRooms > 0 ? Math.round((occupiedRooms / totalRooms) * 100) : 0,
+            monthlyRevenue
         });
     } catch (error) {
         console.error('Error fetching dashboard stats:', error);
-        res.status(500).json({ error: 'Failed to fetch dashboard statistics' });
+        res.status(500).json({ 
+            error: 'Failed to fetch dashboard statistics',
+            details: error.message 
+        });
     }
 });
 
@@ -321,80 +581,379 @@ router.delete('/users/:id', async (req, res) => {
 });
 
 // Reservations management
+
+// Get all reservations
 router.get('/reservations', async (_req, res) => {
-    const list = await prisma.reservation.findMany({ include: { user: true, room: true } });
-    res.json(list);
+    const reservations = await prisma.reservation.findMany({
+        include: { user: true, room: true },
+        orderBy: { createdAt: 'desc' }
+    });
+    res.json(reservations);
 });
 
-// Get available users and rooms for dropdowns
-router.get('/reservations/options', async (_req, res) => {
-    const [users, rooms] = await Promise.all([
-        prisma.user.findMany({ select: { id: true, name: true, email: true } }),
-        prisma.room.findMany({ select: { id: true, number: true, type: true } })
-    ]);
-    res.json({ users, rooms });
-});
-
-router.post('/reservations', async (req, res) => {
-    const { userId, roomId, checkIn, checkOut, status = 'Pending' } = req.body;
-    
-    // Validate that user and room exist
-    const [user, room] = await Promise.all([
-        prisma.user.findUnique({ where: { id: Number(userId) } }),
-        prisma.room.findUnique({ where: { id: Number(roomId) } })
-    ]);
-    
-    if (!user) return res.status(400).json({ message: `User with ID ${userId} not found` });
-    if (!room) return res.status(400).json({ message: `Room with ID ${roomId} not found` });
-    
-    const r = await prisma.reservation.create({ data: { userId: Number(userId), roomId: Number(roomId), checkIn: new Date(checkIn), checkOut: new Date(checkOut), status } });
-    res.status(201).json(r);
-});
-
-router.put('/reservations/:id', async (req, res) => {
+// Get single reservation by ID
+router.get('/reservations/:id', async (req, res) => {
     try {
-        const id = Number(req.params.id);
-        const { userId, roomId, checkIn, checkOut, status } = req.body;
-        
-        const reservation = await prisma.reservation.update({
-            where: { id },
-            data: {
-                ...(userId != null && { userId: Number(userId) }),
-                ...(roomId != null && { roomId: Number(roomId) }),
-                ...(checkIn && { checkIn: new Date(checkIn) }),
-                ...(checkOut && { checkOut: new Date(checkOut) }),
-                ...(status && { status })
-            },
-            include: {
-                room: {
-                    select: {
-                        number: true
-                    }
-                },
+        const reservation = await prisma.reservation.findUnique({
+            where: { id: Number(req.params.id) },
+            include: { 
                 user: {
                     select: {
                         id: true,
                         name: true,
                         email: true
                     }
+                },
+                room: {
+                    select: {
+                        id: true,
+                        number: true,
+                        type: true,
+                        price: true,
+                        status: true,
+                        description: true,
+                        amenities: true
+                    }
                 }
             }
         });
+        
+        if (!reservation) {
+            return res.status(404).json({ error: 'Reservation not found' });
+        }
+        
+        // Format dates to ISO string for the frontend
+        const formattedReservation = {
+            ...reservation,
+            checkIn: reservation.checkIn.toISOString(),
+            checkOut: reservation.checkOut.toISOString(),
+            createdAt: reservation.createdAt.toISOString(),
+            updatedAt: reservation.updatedAt?.toISOString()
+        };
+        
+        res.json(formattedReservation);
+    } catch (error) {
+        console.error('Error fetching reservation:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch reservation',
+            details: error.message 
+        });
+    }
+});
 
-        // Create notification for booking confirmation
-        if (status === 'Confirmed' && reservation.user && reservation.room) {
+// Get available users and rooms for dropdowns
+router.get('/reservations/options', async (req, res) => {
+    try {
+        const { checkIn, checkOut } = req.query;
+        
+        // Validate dates
+        const checkInDate = checkIn ? new Date(checkIn) : new Date();
+        const checkOutDate = checkOut ? new Date(checkOut) : new Date(new Date().setDate(checkInDate.getDate() + 1));
+        
+        if (isNaN(checkInDate.getTime()) || isNaN(checkOutDate.getTime())) {
+            return res.status(400).json({ error: 'Invalid date format. Please use ISO format (YYYY-MM-DD)' });
+        }
+        
+        if (checkInDate >= checkOutDate) {
+            return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+        }
+        
+        // Get all available rooms that don't have conflicting reservations
+        const availableRooms = await prisma.room.findMany({
+            where: {
+                available: true,
+                status: 'AVAILABLE',
+                NOT: {
+                    reservations: {
+                        some: {
+                            status: { in: ['CONFIRMED', 'CHECKED_IN'] },
+                            OR: [
+                                { checkIn: { lte: checkOutDate }, checkOut: { gt: checkInDate } },
+                                { checkIn: { lt: checkOutDate }, checkOut: { gte: checkInDate } }
+                            ]
+                        }
+                    }
+                }
+            },
+            select: {
+                id: true,
+                number: true,
+                type: true,
+                price: true,
+                status: true,
+                capacity: true
+            },
+            orderBy: { number: 'asc' }
+        });
+
+        // Get active users
+        const users = await prisma.user.findMany({ 
+            where: { isActive: true },
+            select: { 
+                id: true, 
+                name: true, 
+                email: true 
+            },
+            orderBy: { name: 'asc' }
+        });
+
+        res.json({ 
+            success: true,
+            data: { 
+                users, 
+                rooms: availableRooms,
+                checkIn: checkInDate.toISOString(),
+                checkOut: checkOutDate.toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('Error in /reservations/options:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to load reservation options',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Create new reservation
+router.post('/reservations', async (req, res) => {
+    const { userId, roomId, checkIn, checkOut, status = 'PENDING' } = req.body;
+    
+    // Basic validation
+    if (!userId || !roomId || !checkIn || !checkOut) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const checkInDate = new Date(checkIn);
+    const checkOutDate = new Date(checkOut);
+
+    // Validate dates
+    if (checkInDate >= checkOutDate) {
+        return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+    }
+
+    try {
+        // Check if user and room exist
+        const [user, room] = await Promise.all([
+            prisma.user.findUnique({ where: { id: Number(userId) } }),
+            prisma.room.findUnique({ 
+                where: { id: Number(roomId) },
+                include: {
+                    reservations: {
+                        where: {
+                            status: { in: ['CONFIRMED', 'CHECKED_IN'] },
+                            OR: [
+                                { checkIn: { lt: checkOutDate }, checkOut: { gt: checkInDate } }
+                            ]
+                        }
+                    }
+                }
+            })
+        ]);
+
+        if (!user) return res.status(400).json({ error: `User with ID ${userId} not found` });
+        if (!room) return res.status(400).json({ error: `Room with ID ${roomId} not found` });
+        
+        // Check room status
+        if (room.status === 'MAINTENANCE' || room.status === 'CLEANING') {
+            return res.status(400).json({ 
+                error: `Room is currently under ${room.status.toLowerCase()}` 
+            });
+        }
+
+        // Check for existing reservations that conflict
+        if (room.reservations.length > 0) {
+            return res.status(400).json({ 
+                error: 'Room is already booked for the selected dates',
+                conflictingReservations: room.reservations
+            });
+        }
+
+        // Create the reservation in a transaction
+        const result = await prisma.$transaction(async (tx) => {
+            // Create the reservation
+            const reservation = await tx.reservation.create({
+                data: {
+                    userId: Number(userId),
+                    roomId: Number(roomId),
+                    checkIn: checkInDate,
+                    checkOut: checkOutDate,
+                    status: status.toUpperCase()
+                },
+                include: {
+                    user: true,
+                    room: true
+                }
+            });
+
+            // Update room status if reservation is confirmed or checked in
+            if (['CONFIRMED', 'CHECKED_IN'].includes(status.toUpperCase())) {
+                await tx.room.update({
+                    where: { id: Number(roomId) },
+                    data: { 
+                        status: 'OCCUPIED',
+                        available: false 
+                    }
+                });
+            }
+
+            return reservation;
+        });
+
+        res.status(201).json(result);
+    } catch (error) {
+        console.error('Error creating reservation:', error);
+        res.status(500).json({ 
+            error: 'Failed to create reservation',
+            details: error.message 
+        });
+    }
+});
+
+// Update an existing reservation
+router.put('/reservations/:id', async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        const { userId, roomId, checkIn, checkOut, status } = req.body;
+        
+        // Validate required fields
+        if (!userId || !roomId || !checkIn || !checkOut) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const checkInDate = new Date(checkIn);
+        const checkOutDate = new Date(checkOut);
+
+        // Validate dates
+        if (checkInDate >= checkOutDate) {
+            return res.status(400).json({ error: 'Check-out date must be after check-in date' });
+        }
+
+        // Get the current reservation first
+        const currentReservation = await prisma.reservation.findUnique({
+            where: { id },
+            include: { room: true }
+        });
+
+        if (!currentReservation) {
+            return res.status(404).json({ error: 'Reservation not found' });
+        }
+
+        // Check if the room exists
+        const room = await prisma.room.findUnique({
+            where: { id: Number(roomId) }
+        });
+
+        if (!room) {
+            return res.status(400).json({ error: 'Room not found' });
+        }
+
+        // Check for conflicting reservations (excluding the current one)
+        const conflictingReservations = await prisma.reservation.findMany({
+            where: {
+                id: { not: id }, // Exclude current reservation
+                roomId: Number(roomId),
+                status: { in: ['CONFIRMED', 'CHECKED_IN'] },
+                OR: [
+                    { 
+                        checkIn: { lte: checkOutDate },
+                        checkOut: { gte: checkInDate }
+                    }
+                ]
+            }
+        });
+
+        if (conflictingReservations.length > 0) {
+            return res.status(400).json({ 
+                error: 'Room is already booked for the selected dates',
+                conflictingReservations
+            });
+        }
+
+        // Update the reservation
+        const updatedReservation = await prisma.$transaction(async (tx) => {
+            // Update the reservation
+            const updated = await tx.reservation.update({
+                where: { id },
+                data: {
+                    userId: Number(userId),
+                    roomId: Number(roomId),
+                    checkIn: checkInDate,
+                    checkOut: checkOutDate,
+                    status: status || currentReservation.status
+                },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            name: true,
+                            email: true
+                        }
+                    },
+                    room: {
+                        select: {
+                            id: true,
+                            number: true,
+                            status: true
+                        }
+                    }
+                }
+            });
+
+            // Update room status based on reservation status
+            if (status === 'CHECKED_IN') {
+                await tx.room.update({
+                    where: { id: Number(roomId) },
+                    data: { status: 'OCCUPIED' }
+                });
+            } else if (currentReservation.roomId !== Number(roomId)) {
+                // If room was changed, update the old room status
+                await tx.room.update({
+                    where: { id: currentReservation.roomId },
+                    data: { status: 'AVAILABLE' }
+                });
+            }
+
+            // If changing from CHECKED_IN to another status, update the room status
+            if (currentReservation.status === 'CHECKED_IN' && status !== 'CHECKED_IN') {
+                // Check if there are other active reservations for this room
+                const activeReservations = await tx.reservation.count({
+                    where: {
+                        roomId: updated.room.id,
+                        status: 'CHECKED_IN',
+                        id: { not: id }
+                    }
+                });
+
+                if (activeReservations === 0) {
+                    await tx.room.update({
+                        where: { id: updated.room.id },
+                        data: { status: 'AVAILABLE' }
+                    });
+                }
+            }
+
+            return updated;
+        });
+
+        // Send notification if status changed to CONFIRMED
+        if (status === 'CONFIRMED' && updatedReservation.user && updatedReservation.room) {
             await NotificationService.notifyBookingConfirmed(
-                reservation.userId,
-                reservation.id,
-                reservation.room.number,
-                reservation.checkIn
+                updatedReservation.userId,
+                updatedReservation.id,
+                updatedReservation.room.number,
+                updatedReservation.checkIn
             );
         }
 
-        res.json(reservation);
+        res.json(updatedReservation);
     } catch (error) {
         console.error('Error updating reservation:', error);
-        res.status(500).json({ message: 'Failed to update reservation', error: error.message });
+        res.status(500).json({ 
+            error: 'Failed to update reservation', 
+            details: error.message 
+        });
     }
 });
 

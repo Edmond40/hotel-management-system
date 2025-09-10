@@ -2,12 +2,18 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
+import neonAuthRoutes from './routes/neonAuth.js';
 import guestRoutes from './routes/guest.js';
 import adminRoutes from './routes/admin.js';
 
 // Validate required environment variables (only essential ones)
 const requiredEnvVars = ['DATABASE_URL', 'JWT_SECRET'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+
+// Set default PROJECT_ID if not provided
+if (!process.env.PROJECT_ID) {
+  process.env.PROJECT_ID = 'hotel-management-system';
+}
 
 if (missingEnvVars.length > 0) {
     console.error('❌ Missing required environment variables:');
@@ -37,7 +43,7 @@ const corsOptions = {
     return callback(new Error(`CORS origin not allowed: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
 };
 
 app.use(cors(corsOptions));
@@ -46,6 +52,7 @@ app.use(express.json());
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRoutes);
+app.use('/api/neon-auth', neonAuthRoutes);
 app.use('/api/guest', guestRoutes);
 app.use('/api/admin', adminRoutes);
 

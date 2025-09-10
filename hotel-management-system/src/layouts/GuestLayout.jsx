@@ -56,7 +56,7 @@ function GuestLayout({ children }) {
 				</div>
 			</nav>
 
-			<main className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 mb-16">
+			<main className="w-full max-w-7xl mx-auto px-3 h-screen sm:px-6 lg:px-8 py-18">
 				{children ?? <Outlet />}
 			</main>
 			<footer className="fixed bottom-0 left-0 right-0 p-2 sm:p-4 text-center text-xs text-slate-500 bg-green-100"> {new Date().getFullYear()} Ahenkana Hotel</footer>

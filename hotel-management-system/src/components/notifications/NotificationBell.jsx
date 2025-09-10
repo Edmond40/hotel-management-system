@@ -23,8 +23,7 @@ function NotificationBell() {
                 const currentUnreadCount = data.filter(n => !n.isRead).length;
                 if (currentUnreadCount > lastNotificationCount && lastNotificationCount > 0) {
                     setHasNewNotifications(true);
-                    // Auto-clear the new notification indicator after 5 seconds
-                    setTimeout(() => setHasNewNotifications(false), 5000);
+                    // Show new notification indicator until user interacts
                 }
                 setLastNotificationCount(currentUnreadCount);
                 setNotifications(data);
@@ -38,7 +37,7 @@ function NotificationBell() {
         fetchData();
         
         // Set up polling for real-time notifications
-        const pollInterval = setInterval(fetchData, 30000); // Poll every 30 seconds
+        const pollInterval = setInterval(fetchData, 10000); // Poll every 10 seconds
         
         // Close dropdown when clicking outside
         const handleClickOutside = (event) => {

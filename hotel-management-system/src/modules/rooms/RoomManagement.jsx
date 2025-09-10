@@ -191,7 +191,7 @@ const RoomManagement = () => {
               <div className="space-y-3 mb-4">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Price:</span>
-                  <span className="font-semibold text-gray-900">${room.price}/night</span>
+                  <span className="font-semibold text-gray-900">₵{room.price}/night</span>
                 </div>
                 {room.floor && (
                   <div className="flex justify-between">
@@ -296,7 +296,7 @@ const RoomManagement = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Price per Night ($)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Price per Night (₵)</label>
                   <input
                     type="number"
                     value={newRoom.price}
@@ -415,7 +415,7 @@ const RoomManagement = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Price per Night ($)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Price per Night (₵)</label>
                   <input
                     type="number"
                     value={selectedRoom.price}

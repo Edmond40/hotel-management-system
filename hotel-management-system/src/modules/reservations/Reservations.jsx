@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, AlertCircle } from 'lucide-react';
 import http from '../../features/shared/services/http.js';
+import { toast } from 'react-toastify';
 
 function Reservations() {
 	const [reservations, setReservations] = useState([]);
 	const [isOpen, setIsOpen] = useState(false);
 	const [editing, setEditing] = useState(null);
-	const [form, setForm] = useState({ userId: '', roomId: '', checkIn: '', checkOut: '', status: 'Pending' });
+	const [form, setForm] = useState({ 
+		userId: '', 
+		roomId: '', 
+		checkIn: '', 
+		checkOut: '', 
+		status: 'PENDING' 
+	});
+	const [formErrors, setFormErrors] = useState({});
+	const [availableRooms, setAvailableRooms] = useState([]);
+	const [isLoadingRooms, setIsLoadingRooms] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [users, setUsers] = useState([]);
 	const [rooms, setRooms] = useState([]);
@@ -46,20 +56,52 @@ function Reservations() {
 
 	const openForCreate = () => { 
 		setEditing(null); 
-		setForm({ userId: '', roomId: '', checkIn: '', checkOut: '', status: 'Pending' }); 
+		setForm({ 
+			userId: '', 
+			roomId: '', 
+			checkIn: '', 
+			checkOut: '', 
+			status: 'PENDING' 
+		});
+		setFormErrors({});
 		setIsOpen(true); 
 	};
 
-	const openForEdit = (r) => { 
-		setEditing(r); 
-		setForm({ 
-			userId: r.userId, 
-			roomId: r.roomId, 
-			checkIn: r.checkIn?.slice(0,10), 
-			checkOut: r.checkOut?.slice(0,10), 
-			status: r.status 
-		}); 
-		setIsOpen(true); 
+	const openForEdit = async (reservation) => {
+		try {
+			setEditing(reservation.id);
+			const [reservationDetails] = await Promise.all([
+				http.get(`/admin/reservations/${reservation.id}`)
+			]);
+
+			// Format dates for the form
+			const checkInDate = new Date(reservationDetails.checkIn).toISOString().split('T')[0];
+			const checkOutDate = new Date(reservationDetails.checkOut).toISOString().split('T')[0];
+
+			// Get current room details
+			const currentRoom = await http.get(`/admin/rooms/${reservationDetails.roomId}`);
+
+			setForm({ 
+				userId: String(reservationDetails.userId), 
+				roomId: String(reservationDetails.roomId), 
+				checkIn: checkInDate,
+				checkOut: checkOutDate,
+				status: reservationDetails.status 
+			});
+
+			// Set available rooms to include the current room
+			setAvailableRooms([{
+				id: String(currentRoom.id),
+				number: currentRoom.number,
+				type: currentRoom.type,
+				price: currentRoom.price
+			}]);
+
+			setIsOpen(true);
+		} catch (error) {
+			console.error('Error fetching reservation details:', error);
+			toast.error('Failed to load reservation details');
+		}
 	};
 
 	async function remove(id) { 
@@ -67,16 +109,97 @@ function Reservations() {
 		fetchAll(); 
 	}
 
-	async function save(e) {
-		e.preventDefault();
-		if (editing) {
-			await http.put(`/admin/reservations/${editing.id}`, form);
-		} else {
-			await http.post('/admin/reservations', form);
+	const validateForm = () => {
+		const errors = {};
+		const today = new Date().toISOString().split('T')[0];
+		
+		if (!form.userId) errors.userId = 'Guest is required';
+		if (!form.roomId) errors.roomId = 'Room is required';
+		if (!form.checkIn) {
+			errors.checkIn = 'Check-in date is required';
+		} else if (form.checkIn < today) {
+			errors.checkIn = 'Check-in date cannot be in the past';
 		}
-		setIsOpen(false);
-		fetchAll();
-	}
+		if (!form.checkOut) {
+			errors.checkOut = 'Check-out date is required';
+		} else if (form.checkIn && form.checkOut <= form.checkIn) {
+			errors.checkOut = 'Check-out date must be after check-in date';
+		}
+		
+		setFormErrors(errors);
+		return Object.keys(errors).length === 0;
+	};
+
+	const fetchAvailableRooms = async (checkIn, checkOut) => {
+		try {
+			setIsLoadingRooms(true);
+			// Get fresh room data with availability for the selected dates
+			const { rooms } = await http.get('/admin/reservations/options', {
+				params: { checkIn, checkOut }
+			});
+			setAvailableRooms(rooms);
+		} catch (error) {
+			console.error('Error fetching available rooms:', error);
+			toast.error('Failed to load available rooms');
+		} finally {
+			setIsLoadingRooms(false);
+		}
+	};
+
+	const handleDateChange = async (field, value) => {
+		const newForm = { ...form, [field]: value };
+		setForm(newForm);
+		
+		// If both dates are selected, fetch available rooms
+		if (newForm.checkIn && newForm.checkOut) {
+			await fetchAvailableRooms(newForm.checkIn, newForm.checkOut);
+			
+			// If current room is not in available rooms, clear it
+			if (newForm.roomId && !availableRooms.some(r => r.id === newForm.roomId)) {
+				setForm(prev => ({ ...prev, roomId: '' }));
+			}
+		}
+	};
+
+	const handleSubmit = async (e) => {
+		e.preventDefault();
+		
+		if (!validateForm()) {
+			return;
+		}
+
+		try {
+			const payload = {
+				...form,
+				userId: parseInt(form.userId, 10),
+				roomId: parseInt(form.roomId, 10)
+			};
+
+			if (editing) {
+				await http.put(`/admin/reservations/${editing}`, payload);
+				toast.success('Reservation updated successfully');
+			} else {
+				await http.post('/admin/reservations', payload);
+				toast.success('Reservation created successfully');
+			}
+			
+			setIsOpen(false);
+			fetchAll();
+		} catch (error) {
+			console.error('Failed to save reservation:', error);
+			const errorMessage = error.response?.data?.error || 'Failed to save reservation';
+			toast.error(errorMessage);
+			
+			// Show detailed error if there are conflicting reservations
+			if (error.response?.data?.conflictingReservations) {
+				setFormErrors({
+					...formErrors,
+					roomId: 'Room is already booked for the selected dates',
+					conflicts: error.response.data.conflictingReservations
+				});
+			}
+		}
+	};
 
 	if (loading) {
 		return (
@@ -156,38 +279,119 @@ function Reservations() {
 							<h3 className="font-semibold">{editing ? 'Edit Reservation' : 'New Reservation'}</h3>
 							<button onClick={() => setIsOpen(false)} className="text-slate-600 hover:text-slate-800"><X size={18} /></button>
 						</div>
-						<form onSubmit={save} className="p-4 grid grid-cols-2 gap-3">
+						<form onSubmit={handleSubmit} className="p-4 grid grid-cols-2 gap-3">
 							<label>
-								<span className="text-sm text-slate-600">User</span>
-								<select 
-									className="mt-1 w-full border rounded px-3 py-2" 
-									value={form.userId} 
-									onChange={(e) => setForm({ ...form, userId: e.target.value })} 
-									required
-								>
-									<option value="">Select User</option>
-									{users.map(user => (
-										<option key={user.id} value={user.id}>
-											{user.name} ({user.email})
-										</option>
-									))}
-								</select>
+								<div className="space-y-1">
+									<div className="flex items-center">
+										<label className="block text-sm font-medium text-gray-700">Guest</label>
+										{formErrors.userId && (
+											<AlertCircle className="ml-1 h-4 w-4 text-red-500" />
+										)}
+									</div>
+									<select
+										className={`mt-1 block w-full rounded-md ${
+											formErrors.userId ? 'border-red-300' : 'border-gray-300'
+										} shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm`}
+										value={form.userId}
+										onChange={(e) => setForm({ ...form, userId: e.target.value })}
+									>
+										<option value="">Select Guest</option>
+										{users.map((user) => (
+											<option key={user.id} value={user.id}>
+												{user.name} ({user.email})
+											</option>
+										))}
+									</select>
+									{formErrors.userId && (
+										<p className="mt-1 text-sm text-red-600">{formErrors.userId}</p>
+									)}
+								</div>
 							</label>
 							<label>
-								<span className="text-sm text-slate-600">Room</span>
-								<select 
-									className="mt-1 w-full border rounded px-3 py-2" 
-									value={form.roomId} 
-									onChange={(e) => setForm({ ...form, roomId: e.target.value })} 
-									required
-								>
-									<option value="">Select Room</option>
-									{rooms.map(room => (
-										<option key={room.id} value={room.id}>
-											Room {room.number} - {room.type} (${room.price})
+								<div className="space-y-1">
+									<div className="flex items-center">
+										<label className="block text-sm font-medium text-gray-700">Room</label>
+										{formErrors.roomId && (
+											<AlertCircle className="ml-1 h-4 w-4 text-red-500" />
+										)}
+									</div>
+									<select
+										className={`mt-1 block w-full rounded-md ${
+											formErrors.roomId ? 'border-red-300' : 'border-gray-300'
+										} shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm`}
+										value={form.roomId}
+										onChange={(e) => setForm({ ...form, roomId: e.target.value })}
+										disabled={isLoadingRooms}
+									>
+										<option value="">
+											{isLoadingRooms ? 'Loading rooms...' : 'Select Room'}
 										</option>
-									))}
-								</select>
+										{availableRooms.length > 0 ? (
+											availableRooms.map((room) => (
+												<option key={room.id} value={room.id}>
+													Room {room.number} - {room.type} (₵{room.price || 'N/A'})
+												</option>
+											))
+										) : (
+											<option disabled>No available rooms for selected dates</option>
+										)}
+									</select>
+									{formErrors.roomId && (
+										<p className="mt-1 text-sm text-red-600">{formErrors.roomId}</p>
+									)}
+									{formErrors.conflicts && (
+										<div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-md">
+											<p className="text-sm text-red-600 font-medium">Conflicting Reservations:</p>
+											<ul className="list-disc list-inside text-sm text-red-600 mt-1">
+												{formErrors.conflicts.map((conflict, idx) => (
+													<li key={idx}>
+														{new Date(conflict.checkIn).toLocaleDateString()} - {new Date(conflict.checkOut).toLocaleDateString()}
+													</li>
+												))}
+											</ul>
+										</div>
+									)}
+								</div>
+							</label>
+							<label>
+								<div className="space-y-1">
+									<label className="block text-sm font-medium text-gray-700">Check-in</label>
+									<input
+										type="date"
+										className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
+										value={form.checkIn}
+										onChange={(e) => {
+											handleDateChange('checkIn', e.target.value);
+											// Reset room selection when dates change
+											setForm(prev => ({ ...prev, roomId: '' }));
+										}}
+										min={new Date().toISOString().split('T')[0]}
+										disabled={isLoadingRooms}
+									/>
+									{formErrors.checkIn && (
+										<p className="mt-1 text-sm text-red-600">{formErrors.checkIn}</p>
+									)}
+								</div>
+							</label>
+							<label>
+								<div className="space-y-1">
+									<label className="block text-sm font-medium text-gray-700">Check-out</label>
+									<input
+										type="date"
+										className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm"
+										value={form.checkOut}
+										onChange={(e) => {
+											handleDateChange('checkOut', e.target.value);
+											// Reset room selection when dates change
+											setForm(prev => ({ ...prev, roomId: '' }));
+										}}
+										min={form.checkIn || new Date().toISOString().split('T')[0]}
+										disabled={!form.checkIn || isLoadingRooms}
+									/>
+									{formErrors.checkOut && (
+										<p className="mt-1 text-sm text-red-600">{formErrors.checkOut}</p>
+									)}
+								</div>
 							</label>
 							<label>
 								<span className="text-sm text-slate-600">Status</span>
@@ -196,14 +400,6 @@ function Reservations() {
 									<option>Confirmed</option>
 									<option>Checked-in</option>
 								</select>
-							</label>
-							<label>
-								<span className="text-sm text-slate-600">Check-in</span>
-								<input type="date" className="mt-1 w-full border rounded px-3 py-2" value={form.checkIn} onChange={(e) => setForm({ ...form, checkIn: e.target.value })} required />
-							</label>
-							<label>
-								<span className="text-sm text-slate-600">Check-out</span>
-								<input type="date" className="mt-1 w-full border rounded px-3 py-2" value={form.checkOut} onChange={(e) => setForm({ ...form, checkOut: e.target.value })} required />
 							</label>
 							<div className="col-span-2 flex justify-end gap-2 pt-2">
 								<button type="button" onClick={() => setIsOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
