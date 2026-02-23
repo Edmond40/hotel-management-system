@@ -1,9 +1,7 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js';
 
 class NeonAuthService {
   constructor() {
@@ -19,10 +17,10 @@ class NeonAuthService {
   // Create user with cross-project support
   async createUser(userData) {
     const { name, email, password, role = 'GUEST', projects = [] } = userData;
-    
+
     const hashedPassword = await bcrypt.hash(password, 12);
     const globalUserId = this.generateGlobalUserId();
-    
+
     const user = await prisma.user.create({
       data: {
         name,
@@ -76,7 +74,7 @@ class NeonAuthService {
       projectId: this.projectId,
     };
 
-    const token = jwt.sign(payload, this.jwtSecret, { 
+    const token = jwt.sign(payload, this.jwtSecret, {
       expiresIn: '7d',
       issuer: 'neon-auth',
       audience: user.projects,
@@ -102,7 +100,7 @@ class NeonAuthService {
   async verifyToken(token) {
     try {
       const decoded = jwt.verify(token, this.jwtSecret);
-      
+
       // Check if session exists and is valid
       const session = await prisma.userSession.findUnique({
         where: { token },
@@ -131,7 +129,7 @@ class NeonAuthService {
   // Create API key for cross-project access
   async createApiKey(userId, name, projects = []) {
     const key = `neon_${crypto.randomBytes(32).toString('hex')}`;
-    
+
     const apiKey = await prisma.apiKey.create({
       data: {
         userId,
@@ -183,7 +181,7 @@ class NeonAuthService {
     }
 
     const updatedProjects = [...new Set([...user.projects, projectId])];
-    
+
     return await prisma.user.update({
       where: { globalUserId },
       data: { projects: updatedProjects },
@@ -201,7 +199,7 @@ class NeonAuthService {
     }
 
     const updatedProjects = user.projects.filter(p => p !== projectId);
-    
+
     return await prisma.user.update({
       where: { globalUserId },
       data: { projects: updatedProjects },

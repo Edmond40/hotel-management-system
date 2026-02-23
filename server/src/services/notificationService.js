@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/prisma.js';
 
 class NotificationService {
     // Create a notification for a specific user
@@ -31,7 +29,7 @@ class NotificationService {
             });
 
             const title = isNewItem ? 'New Menu Item Added!' : 'Menu Item Updated!';
-            const message = isNewItem 
+            const message = isNewItem
                 ? `New item "${menuItemName}" has been added to our menu. Check it out!`
                 : `"${menuItemName}" has been updated. Check out the changes!`;
 
@@ -72,7 +70,7 @@ class NotificationService {
     static async notifyRequestStatusChange(userId, requestId, newStatus, menuItemName) {
         try {
             let title, message;
-            
+
             switch (newStatus) {
                 case 'Confirmed':
                     title = 'Request Confirmed!';
@@ -106,7 +104,7 @@ class NotificationService {
     static async notifyPaymentUpdate(userId, invoiceId, amount, status) {
         try {
             let title, message;
-            
+
             switch (status) {
                 case 'Paid':
                     title = 'Payment Received!';
